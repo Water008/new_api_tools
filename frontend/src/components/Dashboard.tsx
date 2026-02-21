@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import { useToast } from './Toast'
 import { TrendChart } from './TrendChart'
-import { Users, Key, Server, Box, Ticket, Zap, Crown, Loader2, RefreshCw, Activity, BarChart3, Clock, Database, Timer, ChevronDown } from 'lucide-react'
+import { Users, Key, Server, Box, Ticket, Zap, Crown, Loader2, RefreshCw, Activity, BarChart3, Clock, Database, Timer, ChevronDown, Hash, ArrowDownToLine, ArrowUpFromLine } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './ui/card'
 import { Button } from './ui/button'
 import { cn } from '../lib/utils'
@@ -90,7 +90,7 @@ export function Dashboard() {
   const [refreshing, setRefreshing] = useState(false)
   const [period, setPeriod] = useState<PeriodType>('24h')
   const [loadError, setLoadError] = useState<string | null>(null)
-  
+
   const DASHBOARD_REFRESH_KEY = 'dashboard_refresh_interval'
   const [refreshInterval, setRefreshInterval] = useState<RefreshInterval>(() => {
     const saved = localStorage.getItem(DASHBOARD_REFRESH_KEY)
@@ -100,10 +100,13 @@ export function Dashboard() {
     const saved = localStorage.getItem(DASHBOARD_REFRESH_KEY)
     return saved ? parseInt(saved, 10) : 0
   })
-  
+
   const [lastRefreshTime, setLastRefreshTime] = useState<Date | null>(null)
   const [showIntervalDropdown, setShowIntervalDropdown] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
+
+  // Ref to always call the latest handleRefresh from timer
+  const handleRefreshRef = useRef<() => void>(() => { })
 
   // 大型系统刷新提示相关状态
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null)
@@ -112,7 +115,7 @@ export function Dashboard() {
   const [refreshProgress, setRefreshProgress] = useState<string | null>(null)
 
   const apiUrl = import.meta.env.VITE_API_URL || ''
-  const requestTimeoutMs = 20_000
+  const requestTimeoutMs = 30_000
   const getAuthHeaders = useCallback(() => ({
     'Content-Type': 'application/json',
     'Authorization': `Bearer ${token}`,
@@ -192,11 +195,11 @@ export function Dashboard() {
         { headers: getAuthHeaders(), signal },
       )
       const data = await response.json()
-      
+
       if (data.success && data.data.length > 0) {
         const sortedByRequest = [...data.data].sort((a: any, b: any) => b.request_count - a.request_count)
         const sortedByQuota = [...data.data].sort((a: any, b: any) => b.quota_used - a.quota_used)
-        
+
         setAnalyticsSummary({
           request_king: sortedByRequest.length > 0 ? {
             user_id: sortedByRequest[0].user_id,
@@ -229,12 +232,13 @@ export function Dashboard() {
   }, [fetchOverview, fetchUsage, fetchModels, fetchTrends, fetchAnalyticsSummary])
 
   const refreshAll = useCallback(async (signal?: AbortSignal): Promise<boolean> => {
-    const results: boolean[] = []
-    results.push(await fetchOverview(true, signal))
-    results.push(await fetchUsage(true, signal))
-    results.push(await fetchModels(true, signal))
-    results.push(await fetchTrends(true, signal))
-    results.push(await fetchAnalyticsSummary(true, signal))
+    const results = await Promise.all([
+      fetchOverview(true, signal),
+      fetchUsage(true, signal),
+      fetchModels(true, signal),
+      fetchTrends(true, signal),
+      fetchAnalyticsSummary(true, signal),
+    ])
     return results.every(Boolean)
   }, [fetchOverview, fetchUsage, fetchModels, fetchTrends, fetchAnalyticsSummary])
 
@@ -366,6 +370,11 @@ export function Dashboard() {
     }
   }
 
+  // Keep ref in sync with latest handleRefresh
+  useEffect(() => {
+    handleRefreshRef.current = handleRefresh
+  })
+
   // 取消刷新确认
   const handleCancelRefresh = () => {
     setShowRefreshConfirm(false)
@@ -383,7 +392,7 @@ export function Dashboard() {
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
-  // 自动刷新倒计时
+  // 自动刷新倒计时 - 使用 ref 避免过期闭包
   useEffect(() => {
     if (refreshInterval === 0) {
       setCountdown(0)
@@ -393,8 +402,8 @@ export function Dashboard() {
     const timer = setInterval(() => {
       setCountdown(prev => {
         if (prev <= 1) {
-          // 触发刷新
-          handleRefresh()
+          // 通过 ref 调用最新的 handleRefresh，确保使用当前 period
+          handleRefreshRef.current()
           return refreshInterval
         }
         return prev - 1
@@ -442,9 +451,7 @@ export function Dashboard() {
 
   const formatQuota = (quota: number) => `$${(quota / 500000).toFixed(2)}`
   const formatNumber = (num: number) => {
-    if (num >= 1000000) return `${(num / 1000000).toFixed(2)}M`
-    if (num >= 1000) return `${(num / 1000).toFixed(1)}K`
-    return num.toString()
+    return num.toLocaleString('zh-CN')
   }
   const getMaxValue = (data: number[]) => Math.max(...data, 1)
   const getPeriodLabel = () => period === '24h' ? '24小时' : period === '3d' ? '3天' : period === '7d' ? '7天' : '14天'
@@ -557,12 +564,12 @@ export function Dashboard() {
               <RefreshCw className={cn("h-4 w-4 mr-2", refreshing && "animate-spin")} />
               {refreshing ? '刷新中...' : '刷新'}
             </Button>
-            
+
             {/* 自动刷新下拉菜单 */}
             <div className="relative" ref={dropdownRef}>
-              <Button 
-                variant="outline" 
-                size="sm" 
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={() => setShowIntervalDropdown(!showIntervalDropdown)}
                 className="h-9 min-w-[100px]"
               >
@@ -576,7 +583,7 @@ export function Dashboard() {
                 )}
                 <ChevronDown className="h-3 w-3 ml-1" />
               </Button>
-              
+
               {showIntervalDropdown && (
                 <div className="absolute right-0 mt-1 w-48 bg-popover border rounded-md shadow-lg z-50">
                   <div className="p-2 border-b">
@@ -611,11 +618,11 @@ export function Dashboard() {
           {/* 时间范围选择 */}
           <div className="inline-flex rounded-lg border bg-muted/50 p-1">
             {(['24h', '3d', '7d', '14d'] as PeriodType[]).map((p) => (
-              <Button 
-                key={p} 
-                variant={period === p ? 'default' : 'ghost'} 
-                size="sm" 
-                onClick={() => setPeriod(p)}
+              <Button
+                key={p}
+                variant={period === p ? 'default' : 'ghost'}
+                size="sm"
+                onClick={() => { setDailyTrends([]); setPeriod(p) }}
                 className="h-7 text-xs px-3"
               >
                 {p === '24h' ? '24小时' : p === '3d' ? '3天' : p === '7d' ? '7天' : '14天'}
@@ -632,40 +639,40 @@ export function Dashboard() {
           平台资源
         </h3>
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
-          <StatCard 
-            title="用户总数" 
-            value={overview?.total_users || 0} 
-            subValue={`${overview?.active_users || 0} 活跃(${getPeriodLabel()})`} 
-            icon={Users} 
-            color="blue" 
+          <StatCard
+            title="用户总数"
+            value={overview?.total_users || 0}
+            subValue={`${overview?.active_users || 0} 活跃(${getPeriodLabel()})`}
+            icon={Users}
+            color="blue"
           />
           <StatCard
             title="令牌总数"
-            value={overview?.total_tokens || 0} 
-            subValue={`${overview?.active_tokens || 0} 活跃(${getPeriodLabel()})`} 
-            icon={Key} 
-            color="emerald" 
+            value={overview?.total_tokens || 0}
+            subValue={`${overview?.active_tokens || 0} 活跃(${getPeriodLabel()})`}
+            icon={Key}
+            color="emerald"
           />
-          <StatCard 
-            title="渠道总数" 
-            value={overview?.total_channels || 0} 
-            subValue={`${overview?.active_channels || 0} 在线`} 
-            icon={Server} 
-            color="purple" 
+          <StatCard
+            title="渠道总数"
+            value={overview?.total_channels || 0}
+            subValue={`${overview?.active_channels || 0} 在线`}
+            icon={Server}
+            color="purple"
           />
-          <StatCard 
-            title="模型数量" 
-            value={overview?.total_models || 0} 
+          <StatCard
+            title="模型数量"
+            value={overview?.total_models || 0}
             subValue="可用模型"
-            icon={Box} 
-            color="orange" 
+            icon={Box}
+            color="orange"
           />
-          <StatCard 
-            title="兑换码" 
-            value={overview?.total_redemptions || 0} 
-            subValue={`${overview?.unused_redemptions || 0} 未用`} 
-            icon={Ticket} 
-            color="pink" 
+          <StatCard
+            title="兑换码"
+            value={overview?.total_redemptions || 0}
+            subValue={`${overview?.unused_redemptions || 0} 未用`}
+            icon={Ticket}
+            color="pink"
           />
         </div>
       </section>
@@ -676,44 +683,50 @@ export function Dashboard() {
           <Activity className="w-5 h-5 text-primary" />
           流量分析 ({getPeriodLabel()})
         </h3>
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
-          <StatCard 
-            title="请求总数" 
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+          <StatCard
+            title="请求总数"
             value={formatNumber(usage?.total_requests || 0)}
             rawValue={usage?.total_requests || 0}
             icon={BarChart3}
             color="indigo"
             variant="compact"
           />
-          <StatCard 
-            title="消耗额度" 
-            value={formatQuota(usage?.total_quota_used || 0)} 
+          <StatCard
+            title="消耗额度"
+            value={formatQuota(usage?.total_quota_used || 0)}
             rawValue={usage?.total_quota_used ? usage.total_quota_used / 500000 : 0}
             icon={Zap}
             color="amber"
             variant="compact"
           />
           <StatCard
-            title="输入Token"
-            value={formatNumber(usage?.total_prompt_tokens || 0)}
-            rawValue={usage?.total_prompt_tokens || 0}
-            icon={Users} // Reusing Users icon for visual consistency or change to another
-            color="cyan"
+            title="总 Token"
+            value={formatNumber(Number(usage?.total_prompt_tokens || 0) + Number(usage?.total_completion_tokens || 0))}
+            rawValue={Number(usage?.total_prompt_tokens || 0) + Number(usage?.total_completion_tokens || 0)}
+            icon={Hash}
+            color="purple"
             variant="compact"
-            customLabel="输入"
           />
           <StatCard
-            title="输出Token"
-            value={formatNumber(usage?.total_completion_tokens || 0)}
-            rawValue={usage?.total_completion_tokens || 0}
-            icon={Users}
+            title="输入 Token"
+            value={formatNumber(Number(usage?.total_prompt_tokens || 0))}
+            rawValue={Number(usage?.total_prompt_tokens || 0)}
+            icon={ArrowDownToLine}
+            color="cyan"
+            variant="compact"
+          />
+          <StatCard
+            title="输出 Token"
+            value={formatNumber(Number(usage?.total_completion_tokens || 0))}
+            rawValue={Number(usage?.total_completion_tokens || 0)}
+            icon={ArrowUpFromLine}
             color="teal"
             variant="compact"
-            customLabel="输出"
           />
-          <StatCard 
-            title="平均响应" 
-            value={`${(usage?.average_response_time || 0).toFixed(3)}ms`} 
+          <StatCard
+            title="平均响应"
+            value={`${(usage?.average_response_time || 0).toFixed(3)}ms`}
             icon={Clock}
             color="rose"
             variant="compact"
@@ -726,7 +739,7 @@ export function Dashboard() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
         {/* Daily Trends Chart */}
         <div className="flex flex-col h-full">
-          <TrendChart data={dailyTrends} period={period} loading={loading} />
+          <TrendChart data={dailyTrends} period={period} loading={loading} totalRequests={Number(usage?.total_requests || 0)} />
         </div>
 
         {/* Model Usage List */}
@@ -754,8 +767,8 @@ export function Dashboard() {
                         <span className="text-muted-foreground tabular-nums">{formatNumber(model.request_count)}</span>
                       </div>
                       <div className="h-1.5 w-full bg-secondary rounded-full overflow-hidden">
-                        <div 
-                          className={`h-full rounded-full transition-all duration-700 ease-out ${colors[index % colors.length]}`} 
+                        <div
+                          className={`h-full rounded-full transition-all duration-700 ease-out ${colors[index % colors.length]}`}
                           style={{ width: `${percentage}%` }}
                         />
                       </div>
@@ -774,24 +787,24 @@ export function Dashboard() {
 
       {/* Analytics Kings */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <KingCard 
-          title="请求之王" 
-          subtitle={`${getPeriodLabel()}内请求数最多`} 
-          icon={Zap} 
-          user={analyticsSummary?.request_king} 
-          valueLabel="总请求数" 
-          value={analyticsSummary?.request_king?.request_count.toLocaleString()} 
+        <KingCard
+          title="请求之王"
+          subtitle={`${getPeriodLabel()}内请求数最多`}
+          icon={Zap}
+          user={analyticsSummary?.request_king}
+          valueLabel="总请求数"
+          value={analyticsSummary?.request_king?.request_count.toLocaleString()}
           gradient="from-blue-600 to-indigo-600"
           accentColor="text-blue-100"
         />
-        <KingCard 
-          title="土豪榜首" 
-          subtitle={`${getPeriodLabel()}内消耗额度最多`} 
-          icon={Crown} 
-          user={analyticsSummary?.quota_king} 
-          valueLabel="总消耗额度" 
-          value={analyticsSummary?.quota_king ? `$${(analyticsSummary.quota_king.quota_used / 500000).toFixed(2)}` : undefined} 
-          gradient="from-emerald-600 to-teal-600" 
+        <KingCard
+          title="土豪榜首"
+          subtitle={`${getPeriodLabel()}内消耗额度最多`}
+          icon={Crown}
+          user={analyticsSummary?.quota_king}
+          valueLabel="总消耗额度"
+          value={analyticsSummary?.quota_king ? `$${(analyticsSummary.quota_king.quota_used / 500000).toFixed(2)}` : undefined}
+          gradient="from-emerald-600 to-teal-600"
           accentColor="text-emerald-100"
         />
       </div>
@@ -831,19 +844,23 @@ function StatCard({ title, value, rawValue, subValue, icon: Icon, color, variant
   const theme = colorMap[color] || colorMap.blue
 
   if (variant === 'compact') {
+    // Auto-size font based on value string length
+    const valueStr = String(value)
+    const fontSize = valueStr.length > 14 ? 'text-sm' : valueStr.length > 10 ? 'text-base' : valueStr.length > 7 ? 'text-lg' : 'text-xl'
     return (
-      <Card className={cn("overflow-hidden hover:shadow-md transition-all duration-200 group border-l-4", `border-l-${color}-500`)}>
-        <CardContent className="p-4 flex items-center justify-between">
-          <div className="space-y-1">
+      <Card className={cn("glass-card overflow-hidden hover:shadow-lg hover:-translate-y-0.5 transition-all duration-300 group border-l-4", `border-l-${color}-500`)}>
+        <CardContent className="p-4 flex items-center justify-between relative overflow-hidden">
+          <div className={cn("absolute -right-4 -top-4 w-16 h-16 rounded-full opacity-10 group-hover:opacity-20 transition-opacity duration-300 blur-xl", theme.bg.split(' ')[0])} />
+          <div className="space-y-1 min-w-0 flex-1 mr-2 relative z-10">
             <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{customLabel || title}</p>
-            <div 
-              className="text-xl font-bold tracking-tight cursor-default"
+            <div
+              className={cn(fontSize, "font-bold tracking-tight cursor-default tabular-nums text-foreground/90")}
               title={rawValue !== undefined ? rawValue.toLocaleString('zh-CN') : undefined}
             >
               {value}
             </div>
           </div>
-          <div className={cn("p-2 rounded-full", theme.bg)}>
+          <div className={cn("p-2 rounded-xl flex-shrink-0 transition-transform duration-300 group-hover:scale-110 shadow-sm relative z-10", theme.bg)}>
             <Icon className="w-4 h-4" />
           </div>
         </CardContent>
@@ -852,20 +869,21 @@ function StatCard({ title, value, rawValue, subValue, icon: Icon, color, variant
   }
 
   return (
-    <Card className="overflow-hidden hover:shadow-md transition-all duration-200 group">
-      <CardContent className="p-5">
-        <div className="flex justify-between items-start">
+    <Card className="glass-card overflow-hidden hover:shadow-lg hover:-translate-y-1 transition-all duration-300 group">
+      <CardContent className="p-5 relative overflow-hidden">
+        <div className={cn("absolute -right-6 -top-6 w-24 h-24 rounded-full opacity-10 group-hover:opacity-20 transition-opacity duration-300 blur-2xl", theme.bg.split(' ')[0])} />
+        <div className="flex justify-between items-start relative z-10">
           <div className="space-y-2">
             <p className="text-sm font-medium text-muted-foreground">{title}</p>
-            <div className="text-2xl font-bold tracking-tight">{value.toLocaleString()}</div>
+            <div className="text-2xl font-bold tracking-tight text-foreground/90">{value.toLocaleString()}</div>
           </div>
-          <div className={cn("p-2.5 rounded-xl transition-colors duration-200", theme.bg)}>
+          <div className={cn("p-3 rounded-2xl transition-all duration-300 group-hover:scale-110 shadow-sm", theme.bg)}>
             <Icon className="w-5 h-5" />
           </div>
         </div>
         {subValue && (
-          <div className="mt-4 flex items-center text-xs">
-            <span className={cn("font-medium px-2 py-0.5 rounded-full bg-secondary", theme.text)}>
+          <div className="mt-4 flex items-center text-xs relative z-10">
+            <span className={cn("font-medium px-2.5 py-1 rounded-full bg-secondary/80 backdrop-blur-sm shadow-sm border border-black/5 dark:border-white/5", theme.text)}>
               {subValue}
             </span>
           </div>
@@ -888,9 +906,9 @@ interface KingCardProps {
 
 function KingCard({ title, subtitle, icon: Icon, user, valueLabel, value, gradient, accentColor }: KingCardProps) {
   return (
-    <div className={`bg-gradient-to-br ${gradient} rounded-xl shadow-lg p-6 text-white relative overflow-hidden group hover:shadow-xl transition-all duration-300`}>
+    <div className={`glass-card bg-gradient-to-br ${gradient} rounded-2xl shadow-lg p-6 text-white relative overflow-hidden group hover:shadow-xl hover:-translate-y-1 transition-all duration-300 border border-white/20`}>
       {/* Background Pattern */}
-      <div className="absolute top-0 right-0 -mr-4 -mt-4 opacity-10 group-hover:opacity-20 transition-opacity duration-500">
+      <div className="absolute top-0 right-0 -mr-4 -mt-4 opacity-10 group-hover:opacity-20 group-hover:scale-110 transition-all duration-500">
         <Icon className="w-32 h-32 rotate-12" />
       </div>
 
@@ -916,10 +934,10 @@ function KingCard({ title, subtitle, icon: Icon, user, valueLabel, value, gradie
             </div>
           </div>
           <div className="mt-4 flex justify-between items-end">
-             <div>
-               <p className={`text-xs ${accentColor} mb-1`}>{valueLabel}</p>
-               <p className="text-3xl font-bold tracking-tight">{value}</p>
-             </div>
+            <div>
+              <p className={`text-xs ${accentColor} mb-1`}>{valueLabel}</p>
+              <p className="text-3xl font-bold tracking-tight">{value}</p>
+            </div>
           </div>
         </div>
       ) : (
